@@ -1,110 +1,124 @@
-#importando bibliotecas
+# ---------------------------
+# 0️⃣ Bibliotecas
+# ---------------------------
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
-
-# importando modelos
-from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.svm import SVR
-from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import statsmodels.api as sm  # Poisson
+from xgboost import XGBRegressor
 
-# Carregando os dados do CSV correto
-df = pd.read_csv('ocorrencias.csv')  # CSV gerado, separador padrão ','
+# ---------------------------
+# 1️⃣ Carregar CSV
+# ---------------------------
+df = pd.read_csv('ocorrencias.csv')
 
-# Exibindo primeiras linhas e informações do DataFrame
+# Mostrar primeiras linhas e info
 print(df.head())
 print(df.info())
 
-# Exemplo: contar crimes por cidade
-sns.countplot(data=df, x="cidade")
-plt.title("Ocorrências por cidade")
-plt.show()
+# ---------------------------
+# 2️⃣ Valores nulos e tipos
+# ---------------------------
+print("Valores faltantes por coluna:")
+print(df.isnull().sum())
+
+# Ajustando tipos de dados
+df['dia'] = pd.to_datetime(df['dia'], format='%Y-%m-%d')
+df['hora'] = pd.to_datetime(df['hora'], format='%H:%M') - pd.Timedelta(hours=3)  # horário BR
+
+# Traduzindo dia da semana
+dias_pt = {
+    'Monday':'Segunda-feira', 'Tuesday':'Terça-feira', 'Wednesday':'Quarta-feira',
+    'Thursday':'Quinta-feira', 'Friday':'Sexta-feira', 'Saturday':'Sábado', 'Sunday':'Domingo'
+}
+df['dia_semana'] = df['dia_semana'].map(dias_pt)
 
 # ---------------------------
-# 2️⃣ Preprocessing manual de variáveis categóricas (listas)
+# 3️⃣ Preparar dados para regressão
 # ---------------------------
-# Criando listas únicas para codificação
-cidades = df['cidade'].unique().tolist()
-bairros = df['bairro'].unique().tolist()
-tipos = df['tipo_de_crime'].unique().tolist()
-status = df['status_investigacao'].unique().tolist()
-dias_semana = df['dia_semana'].unique().tolist()
+# Vamos prever número de ocorrências por bairro/dia
+df_grouped = df.groupby(['dia','bairro','cidade','tipo_de_crime','status_investigacao']).size().reset_index(name='num_ocorrencias')
 
-# Função para codificar
-df['cidade_num'] = df['cidade'].apply(lambda x: cidades.index(x))
-df['bairro_num'] = df['bairro'].apply(lambda x: bairros.index(x))
-df['tipo_num'] = df['tipo_de_crime'].apply(lambda x: tipos.index(x))
-df['status_num'] = df['status_investigacao'].apply(lambda x: status.index(x))
-df['dia_semana_num'] = df['dia_semana'].apply(lambda x: dias_semana.index(x))
+# Codificação manual de variáveis categóricas
+bairros = df_grouped['bairro'].unique().tolist()
+cidades = df_grouped['cidade'].unique().tolist()
+tipos = df_grouped['tipo_de_crime'].unique().tolist()
+status = df_grouped['status_investigacao'].unique().tolist()
 
-# ---------------------------
-# 3️⃣ Agregar dados por dia e bairro
-# ---------------------------
-df_grouped = df.groupby(['dia','bairro_num']).size().reset_index(name='num_ocorrencias')
+df_grouped['bairro_num'] = df_grouped['bairro'].apply(lambda x: bairros.index(x))
+df_grouped['cidade_num'] = df_grouped['cidade'].apply(lambda x: cidades.index(x))
+df_grouped['tipo_num'] = df_grouped['tipo_de_crime'].apply(lambda x: tipos.index(x))
+df_grouped['status_num'] = df_grouped['status_investigacao'].apply(lambda x: status.index(x))
 
-X = df_grouped[['bairro_num']]  # Pode adicionar 'dia_semana_num', 'cidade_num' etc
+# Features e target
+X = df_grouped[['bairro_num','cidade_num','tipo_num','status_num']]
 y = df_grouped['num_ocorrencias']
 
-# ---------------------------
-# 4️⃣ Separar treino/teste
-# ---------------------------
+# Separar treino e teste
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
 # ---------------------------
-# 5️⃣ Linear Regression
-# ---------------------------
-lr_model = LinearRegression()
-lr_model.fit(X_train, y_train)
-y_pred_lr = lr_model.predict(X_test)
-
-print("=== Linear Regression ===")
-print("R²:", r2_score(y_test, y_pred_lr))
-print("RMSE:", np.sqrt(mean_squared_error(y_test, y_pred_lr)))
-
-# ---------------------------
-# 6️⃣ Random Forest Regressor
+# 4️⃣ Random Forest Regressor
 # ---------------------------
 rf_model = RandomForestRegressor(n_estimators=200, random_state=42)
 rf_model.fit(X_train, y_train)
 y_pred_rf = rf_model.predict(X_test)
 
-print("\n=== Random Forest ===")
-print("R²:", r2_score(y_test, y_pred_rf))
-print("RMSE:", np.sqrt(mean_squared_error(y_test, y_pred_rf)))
+r2_rf = r2_score(y_test, y_pred_rf)
+rmse_rf = np.sqrt(mean_squared_error(y_test, y_pred_rf))
+mae_rf = mean_absolute_error(y_test, y_pred_rf)
 
-# Importância das variáveis
-feat_importances = pd.Series(rf_model.feature_importances_, index=X.columns)
-plt.figure(figsize=(6,4))
-sns.barplot(x=feat_importances.values, y=feat_importances.index)
-plt.title("Importância das variáveis (Random Forest)")
-plt.show()
+print("=== Random Forest ===")
+print(f"R²: {r2_rf:.3f}, RMSE: {rmse_rf:.3f}, MAE: {mae_rf:.3f}")
 
 # ---------------------------
-# 7️⃣ Decision Tree Regressor
+# 5️⃣ Poisson Regression
 # ---------------------------
-dt_model = DecisionTreeRegressor(random_state=42)
-dt_model.fit(X_train, y_train)
-y_pred_dt = dt_model.predict(X_test)
+X_train_poisson = sm.add_constant(X_train)
+X_test_poisson = sm.add_constant(X_test)
 
-print("\n=== Decision Tree ===")
-print("R²:", r2_score(y_test, y_pred_dt))
-print("RMSE:", np.sqrt(mean_squared_error(y_test, y_pred_dt)))
+poisson_model = sm.GLM(y_train, X_train_poisson, family=sm.families.Poisson())
+poisson_results = poisson_model.fit()
+y_pred_poisson = poisson_results.predict(X_test_poisson)
+
+r2_p = r2_score(y_test, y_pred_poisson)
+rmse_p = np.sqrt(mean_squared_error(y_test, y_pred_poisson))
+mae_p = mean_absolute_error(y_test, y_pred_poisson)
+
+print("\n=== Poisson Regression ===")
+print(f"R²: {r2_p:.3f}, RMSE: {rmse_p:.3f}, MAE: {mae_p:.3f}")
 
 # ---------------------------
-# 8️⃣ Comparando predições vs valores reais
+# 6️⃣ XGBoost Regressor
 # ---------------------------
-plt.figure(figsize=(12,6))
-plt.scatter(range(len(y_test)), y_test, label='Real', alpha=0.6)
-plt.scatter(range(len(y_test)), y_pred_lr, label='Linear Regression', alpha=0.6)
-plt.scatter(range(len(y_test)), y_pred_rf, label='Random Forest', alpha=0.6)
-plt.scatter(range(len(y_test)), y_pred_dt, label='Decision Tree', alpha=0.6)
-plt.legend()
-plt.title("Comparação: Valores Reais vs Preditos")
-plt.xlabel("Amostras")
-plt.ylabel("Número de ocorrências")
-plt.show()
+xgb_model = XGBRegressor(objective='reg:squarederror', n_estimators=200, random_state=42)
+xgb_model.fit(X_train, y_train)
+y_pred_xgb = xgb_model.predict(X_test)
+
+r2_xgb = r2_score(y_test, y_pred_xgb)
+rmse_xgb = np.sqrt(mean_squared_error(y_test, y_pred_xgb))
+mae_xgb = mean_absolute_error(y_test, y_pred_xgb)
+
+print("\n=== XGBoost Regression ===")
+print(f"R²: {r2_xgb:.3f}, RMSE: {rmse_xgb:.3f}, MAE: {mae_xgb:.3f}")
+
+# ---------------------------
+# 7️⃣ Comparando modelos
+# ---------------------------
+resultados = pd.DataFrame({
+    'Modelo': ['Random Forest','Poisson Regression','XGBoost'],
+    'R2':[r2_rf, r2_p, r2_xgb],
+    'RMSE':[rmse_rf, rmse_p, rmse_xgb],
+    'MAE':[mae_rf, mae_p, mae_xgb]
+})
+
+print("\n=== Comparação dos modelos ===")
+print(resultados)
+
+# Melhor modelo baseado em R²
+melhor_modelo = resultados.loc[resultados['R2'].idxmax(),'Modelo']
+print(f"\nMelhor modelo: {melhor_modelo}")
